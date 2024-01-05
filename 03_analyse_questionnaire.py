@@ -7,6 +7,8 @@ from matplotlib import pyplot
 import numpy
 import scipy.stats
 
+import pingouin
+
 
 # # # # #
 # SETUP
@@ -76,6 +78,19 @@ for i in range(raw.shape[0]):
     except:
         data["control"][var] = val
 
+# Load the dwell time averages (this is not a questionnaire, but is to be
+# correlated with the career duration question from the healthcare assistant
+# questionnaire.
+fpath = os.path.join(DATADIR, "carehome_dwell_means_disgust_avoidance.csv")
+raw = numpy.loadtxt(fpath, dtype=str, delimiter=",", unpack=False, skiprows=1)
+data["carehome"]["m_d_dwell"] = numpy.zeros(len(data["carehome"]["ppname"]), \
+    dtype=numpy.float64) * numpy.NaN
+for i in range(raw.shape[0]):
+    ppname = raw[i,0]
+    m_d_dwell = float(raw[i,1])
+    ppi = list(data["carehome"]["ppname"]).index(ppname)
+    data["carehome"]["m_d_dwell"][ppi] = m_d_dwell
+
 
 # # # # #
 # FREQUENCY PLOTS
@@ -90,7 +105,8 @@ situations = { \
     "vomit": {"category": "core", "colour":"#4e9a06"}, \
 
     "oral_care": {"category": "gore", "colour":"#5c3566"}, \
-    "blood_stains_clothing_bedding_floor_furniture": {"category": "gore", "colour":"#a40000"}, \
+    "blood_stains_clothing_bedding_floor_furniture": {"category": "gore", \
+        "colour":"#a40000"}, \
     "open_wounds": {"category": "gore", "colour":"#8f5902"}, \
     }
 frequencies = ["Less than once per week", "Once or twice per week", \
@@ -221,23 +237,105 @@ for sample1, sample2 in DIFFERENCE_TESTS:
             sem2 = sd2 / numpy.sqrt(n2)
 
         # Welch's test.
-        t = (m1 - m2) / numpy.sqrt(sem1**2 + sem2**2)
+        # t = (m1 - m2) / numpy.sqrt(sem1**2 + sem2**2)
+        # v = ((sd1**2 / n1) + (sd2**2 / n2))**2 \
+        #     / ((sd1**4 / (n1**2*(n1-1))) + (sd2**4 / (n2**2*(n2-1))))
+        t = (m1 - m2) / numpy.sqrt(sd1/n1 + sd2/n2)
+        ci95 = numpy.array([numpy.NaN, numpy.NaN])
         v = ((sd1**2 / n1) + (sd2**2 / n2))**2 \
-            / ((sd1**4 / (n1**2*(n1-1))) + (sd2**4 / (n2**2*(n2-1))))
+            / (((sd1**2/n1)**2 / (n1-1)) + ((sd2**2/n2)**2 / (n2-1)))
         p = 2 * (1 - scipy.stats.t.cdf(abs(t), v))
-
+        # Compute a Bayes Factor for the same test.
+        bf10 = pingouin.bayesfactor_ttest(t, n1, ny=n2, paired=False, r=0.707)
+        bf01 = 1.0 / bf10
+        
+        # Use pingouin for this test, as somehow my computation for v is subtly
+        # different?!
+        if sample1 == "carehome" and sample2 == "control":
+            pingu_res = pingouin.ttest( \
+                data[sample1]["tdds_{}".format(subscale)], \
+                data[sample2]["tdds_{}".format(subscale)], \
+                paired=False, correction=True, r=0.707)
+            t = pingu_res["T"][0]
+            ci95 = pingu_res["CI95%"][0]
+            v = pingu_res["dof"][0]
+            p = pingu_res["p-val"][0]
+            bf10 = float(pingu_res["BF10"][0])
+            bf01 = 1.0 / bf10
+        
         # Write results to file.
         with open(os.path.join(OUTDIR, "TDDS_results.txt"), "a") as f:
-            f.write("\n{}-{}, {}: t({})={}, p={}".format(sample1, sample2, \
-                subscale, round(v,2), round(t,2), round(p,7)))
+            f.write(("\n{}-{}, {}: t({})={}, CI 95% ({}, {}), p={}, " \
+                + "BF10={}, BF01={}").format(sample1, sample2, subscale, \
+                round(v,2), round(t,2), round(ci95[0],2), round(ci95[1],2), \
+                round(p,7), round(bf10,5), round(bf01,5)))
 
 # Correlate subscales and duration of work.
-with open(os.path.join(OUTDIR, "TDDS_results.txt"), "a") as f:
-    f.write("\n\nKendall's correlation coefficient for the carehome group")
-for subscale in ["pathogen", "sexual", "moral"]:
-    x = data["carehome"]["carehome_career_duration_months"]
-    y = data["carehome"]["tdds_{}".format(subscale)]
-    tau, p = scipy.stats.kendalltau(x, y)
+for coef in ["r", "tau"]:
     with open(os.path.join(OUTDIR, "TDDS_results.txt"), "a") as f:
-        f.write("\n{} x {}: tau={}, p={}".format(subscale, \
-            "carehome_career_duration_months", round(tau,2), round(p,3)))
+        f.write("\n\nCorrelation coefficient {} for the carehome group" \
+            .format(coef))
+    for subscale in ["pathogen", "sexual", "moral"]:
+        x = data["carehome"]["carehome_career_duration_months"]
+        y = data["carehome"]["tdds_{}".format(subscale)]
+        if coef == "tau":
+            #r, p = scipy.stats.kendalltau(x, y)
+            res_pingu = pingouin.corr(x, y, method="kendall")
+            r = res_pingu["r"][0]
+            p = res_pingu["p-val"][0]
+            ci95 = numpy.array([numpy.NaN, numpy.NaN])
+            bf10 = numpy.NaN
+            bf01 = numpy.NaN
+        elif coef == "r":
+            #res, p = scipy.stats.pearsonr(x, y)
+            res_pingu = pingouin.corr(x, y, method="pearson", r=0.707)
+            r = res_pingu["r"][0]
+            ci95 = res_pingu["CI95%"][0]
+            p = res_pingu["p-val"][0]
+            bf10 = float(res_pingu["BF10"][0])
+            bf01 = 1.0 / bf10
+            #res_pingu.r, res_pingu.p, res
+        with open(os.path.join(OUTDIR, "TDDS_results.txt"), "a") as f:
+            f.write(("\n{} x {}: {}={}, CI 95% ({}, {}), p={}, " \
+                + "BF10={}, BF01={}").format( \
+                "carehome_career_duration_months", subscale, coef, \
+                round(r,2), ci95[0], ci95[1], round(p,3), \
+                round(bf10, 5), round(bf01, 5)))
+
+# Correlate dwell time and career durations.
+with open(os.path.join(OUTDIR, "TDDS_results.txt"), "a") as f:
+    f.write("\n\n\nAverage dwell time difference disgust - neutral " \
+        + "(positive values indicate disgust approach, " \
+        + "negative values indicate disgust avoidance)")
+x = data["carehome"]["carehome_career_duration_months"]
+y = data["carehome"]["m_d_dwell"]
+for coef in ["t", "tau", "r"]:
+    with open(os.path.join(OUTDIR, "TDDS_results.txt"), "a") as f:
+        f.write("\n\nTest coefficient {} for the carehome group".format(coef))
+    if coef == "t":
+        res_pingu = pingouin.ttest(y, 0.0, r=0.707)
+        r = res_pingu["T"][0]
+        ci95 = res_pingu["CI95%"][0]
+        p = res_pingu["p-val"][0]
+        bf10 = float(res_pingu["BF10"][0])
+        bf01 = 1.0 / bf10
+    elif coef == "tau":
+        res_pingu = pingouin.corr(x, y, method="kendall")
+        r = res_pingu["r"][0]
+        p = res_pingu["p-val"][0]
+        ci95 = numpy.array([numpy.NaN, numpy.NaN])
+        bf10 = numpy.NaN
+        bf01 = numpy.NaN
+    elif coef == "r":
+        res_pingu = pingouin.corr(x, y, method="pearson", r=0.707)
+        r = res_pingu["r"][0]
+        ci95 = res_pingu["CI95%"][0]
+        p = res_pingu["p-val"][0]
+        bf10 = float(res_pingu["BF10"][0])
+        bf01 = 1.0 / bf10
+    with open(os.path.join(OUTDIR, "TDDS_results.txt"), "a") as f:
+        f.write(("\n{} x {}: {}={}, CI 95% ({}, {}), p={}, " \
+            + "BF10={}, BF01={}").format( \
+            "carehome_career_duration_months", subscale, coef, \
+            round(r,2), ci95[0], ci95[1], round(p,3), \
+            round(bf10, 5), round(bf01, 5)))
