@@ -522,30 +522,6 @@ if (not os.path.isfile(DWELLPATH)) or OVERWRITE_TMP:
                     stim_count[stimuli["affective"]], 0, :]
 
     # CSV OUTPUT
-    # Wide format.
-    with open(os.path.join(OUTDIR, "dwell_means.csv"), "w") as f:
-        header = ["ppname"]
-        for ci, con in enumerate(CONDITIONS):
-            for i in range(NTRIALSPERSTIM):
-                for j, stim in enumerate(["neutral", "affective"]):
-                    header.append("{}_{}_{}".format(con, i+1, stim))
-        f.write(",".join(map(str, header)))
-        for pi, participant in enumerate(participants):
-            line = [participant]
-            for ci, con in enumerate(CONDITIONS):
-                for i in range(NTRIALSPERSTIM):
-                    for j, stim in enumerate(["neutral", "affective"]):
-                        # Average over time.
-                        d = numpy.nanmean(dwell[pi,ci,:,i,j,:], axis=1)
-                        # Average over stimuli.
-                        d = numpy.nanmean(d, axis=0)
-                        if d == 0:
-                            d = numpy.nan
-                        # Add to the line.
-                        line.append(d)
-            # Write to file.
-            f.write("\n" + ",".join(map(str, line)))
-
     # Long format.
     with open(os.path.join(OUTDIR, "dwell_means_long.csv"), "w") as f:
         if "_" in CONDITIONS[0]:
